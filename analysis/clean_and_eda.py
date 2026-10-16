@@ -1,4 +1,3 @@
-
 import pandas as pd
 
 ===============================================================
@@ -176,3 +175,83 @@ print("\nJanuary's apparent lead is an artifact of O0011 (2026-01-28) "
       "and O0098 (2026-01-10).")
 print("After excluding these bulk orders, March is the genuine peak month.")
 
+
+======================================================================
+Generating json files
+======================================================================
+
+
+
+import json
+import os
+import pandas as pd
+
+# Revenue calculations
+cleaned_revenue = round(df_merged["order_value"].sum(), 2)
+raw_revenue = 99860.20
+reconciliation_delta = round(raw_revenue - cleaned_revenue, 2)
+
+# Return rates by payment method
+return_rates = (
+    df_merged.groupby("payment_method")["returned"]
+    .mean().mul(100).round(1)
+)
+
+# Return rates by payment method and city tier
+segment = df_merged.groupby(
+    ["payment_method", "city_tier"]
+)["returned"].agg(["count", "mean"])
+
+segment["return_rate_pct"] = (segment["mean"] * 100).round(1)
+highest = segment["return_rate_pct"].idxmax()
+
+# Monthly revenue before and after excluding outlier orders
+df_merged["order_date"] = pd.to_datetime(df_merged["order_date"])
+df_merged["month"] = df_merged["order_date"].dt.to_period("M")
+
+monthly_raw = df_merged.groupby("month")["order_value"].sum().round(2)
+
+outliers = ["O0011", "O0098"]
+corrected = df_merged[
+    ~df_merged["order_id"].isin(outliers)
+].copy()
+
+monthly_corrected = (
+    corrected.groupby("month")["order_value"].sum().round(2)
+)
+
+peak_month = monthly_corrected.idxmax()
+highest_rate = float(segment.loc[highest, "return_rate_pct"])
+
+findings = {
+    "cleaned_total_revenue_inr": cleaned_revenue,
+    "raw_total_revenue_inr": raw_revenue,
+    "duplicate_reconciliation_delta_inr": reconciliation_delta,
+    "return_rate_by_payment": return_rates.to_dict(),
+    "highest_risk_segment": {
+        "payment_method": highest[0],
+        "city_tier": int(highest[1]),
+        "return_rate_pct": highest_rate
+    },
+    "true_peak_month": {
+        "month": str(peak_month),
+        "revenue_inr": float(monthly_corrected.loc[peak_month])
+    },
+    "outlier_inflated_month": {
+        "month": "2026-01",
+        "apparent_revenue_inr": float(
+            monthly_raw.loc[pd.Period("2026-01")]
+        ),
+        "corrected_revenue_inr": float(
+            monthly_corrected.loc[pd.Period("2026-01")]
+        )
+    }
+}
+
+os.makedirs("narrator", exist_ok=True)
+
+with open("narrator/findings.json", "w") as f:
+    json.dump(findings, f, indent=4)
+
+print(json.dumps(findings, indent=4))
+print("findings.json created.")
